@@ -439,9 +439,10 @@ class ProxyFilter internal constructor(
                                 // they were sent (as they should), we must remove the addresses at
                                 // the end.
                                 expectedListSize = addresses.size + request.addresses.size
+                                val takeCount = (message.listSize.toInt() - addresses.size).coerceAtLeast(0)
                                 val addedAddresses = request.addresses
                                     .sortedBy { it.address }
-                                    .take(message.listSize.toInt() - addresses.size)
+                                    .take(takeCount)
                                 _addresses = addedAddresses.union(_addresses).toMutableList()
                             }
 

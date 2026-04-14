@@ -30,6 +30,7 @@ import java.security.PrivateKey
 import java.security.PublicKey
 import java.security.SecureRandom
 import java.security.Security
+import java.security.spec.ECGenParameterSpec
 import java.security.spec.InvalidKeySpecException
 import javax.crypto.Cipher
 import javax.crypto.KeyAgreement
@@ -94,19 +95,14 @@ object Crypto {
      * @param algorithm Algorithm to use.
      * @return KeyPair
      */
-    fun generateKeyPair(algorithm: Algorithm): KeyPair = KeyPairGeneratorSpi.ECDH()
-        .run {
-            @Suppress("DEPRECATION")
-            when (algorithm) {
-                Algorithm.FIPS_P256_ELLIPTIC_CURVE,
-                Algorithm.BTM_ECDH_P256_CMAC_AES128_AES_CCM,
-                Algorithm.BTM_ECDH_P256_HMAC_SHA256_AES_CCM
-                    -> {
-                    initialize(256)
-                    generateKeyPair()
-                }
-            }
-        }
+    // lagree: explicit BouncyCastle secp256r1 keypair — required for provisioning to
+    // succeed against the Bitgear STM32WB firmware (upstream's KeyPairGeneratorSpi path
+    // produced keys the device rejects). Keep across upstream updates.
+    fun generateKeyPair(algorithm: Algorithm): KeyPair {
+        val kpg = java.security.KeyPairGenerator.getInstance("ECDH", "BC")
+        kpg.initialize(ECNamedCurveTable.getParameterSpec("secp256r1"), secureRandom)
+        return kpg.generateKeyPair()
+    }
 
 
     /**

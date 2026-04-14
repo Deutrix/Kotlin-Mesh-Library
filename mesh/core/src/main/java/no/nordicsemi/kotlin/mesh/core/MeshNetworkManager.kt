@@ -61,6 +61,17 @@ import kotlin.uuid.ExperimentalUuidApi
 import kotlin.uuid.Uuid
 
 /**
+ * An incoming mesh message with source address information.
+ *
+ * @property source  The source address of the message sender.
+ * @property message The decoded mesh message.
+ */
+data class IncomingMeshMessage(
+    val source: MeshAddress,
+    val message: BaseMeshMessage,
+)
+
+/**
  * MeshNetworkManager is the entry point to the Mesh library.
  *
  * @param storage                     Custom storage option allowing users to save the mesh network
@@ -83,6 +94,7 @@ import kotlin.uuid.Uuid
  *                                    node.
  * @property attentionTimer           Flow that notifies the client app about the health attention
  *                                    timer start and stop events.
+ * @property incomingMeshMessagesWithSource Flow containing incoming access messages with source address.
  */
 class MeshNetworkManager(
     private val storage: Storage,
@@ -117,6 +129,16 @@ class MeshNetworkManager(
                 observeMeshMessages = null
             }
         }
+
+    // lagree: app-facing flows exposing incoming access messages (with source address for
+    // liveness stamping). Additive to upstream; keep across updates.
+    private val _incomingMeshMessages = MutableSharedFlow<BaseMeshMessage>()
+    val incomingMeshMessages: SharedFlow<BaseMeshMessage>
+        get() = _incomingMeshMessages.asSharedFlow()
+
+    private val _incomingMeshMessagesWithSource = MutableSharedFlow<IncomingMeshMessage>()
+    val incomingMeshMessagesWithSource: SharedFlow<IncomingMeshMessage>
+        get() = _incomingMeshMessagesWithSource.asSharedFlow()
 
     var logger: Logger? = null
 
@@ -1187,6 +1209,12 @@ class MeshNetworkManager(
             runCatching {
                 observeMeshMessages = networkManager?.incomingMeshMessages
                     ?.onEach {
+                        // lagree: feed the app-facing flows first (liveness stamping needs the
+                        // source even for message types the upstream cast below can't handle).
+                        _incomingMeshMessages.emit(it.message)
+                        _incomingMeshMessagesWithSource.emit(
+                            IncomingMeshMessage(source = it.source, message = it.message)
+                        )
                         _networkEvents.emit(
                             value = NetworkEvent.MeshMessageReceived(
                                 source = it.source.address,
