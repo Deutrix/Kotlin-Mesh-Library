@@ -380,7 +380,7 @@ internal class NetworkManager internal constructor(
                 mutex.withLock { outgoingMessages.remove(destination) }
             }
         } catch (t: Throwable) {
-            clearBusyOnAbnormalExit(MeshAddress.create(address = destination), t)
+            clearBusyOnAbnormalExit(destination, t)
         }
     }
 
