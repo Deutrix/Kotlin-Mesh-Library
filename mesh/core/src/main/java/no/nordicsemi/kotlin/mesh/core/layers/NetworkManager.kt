@@ -4,6 +4,7 @@ package no.nordicsemi.kotlin.mesh.core.layers
 
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.FlowPreview
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -15,6 +16,7 @@ import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.timeout
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.sync.withLock
 import no.nordicsemi.kotlin.mesh.bearer.MeshBearer
 import no.nordicsemi.kotlin.mesh.bearer.PduType
@@ -286,6 +288,18 @@ internal class NetworkManager internal constructor(
     }
 
     /**
+     * Lagree vendored fix (Run 9b, 2026-08-19): [outgoingMessages] is cleared on success and by
+     * the lower transport on transmission/completion — but when the caller's timeout CANCELS a
+     * suspended send (or it throws) before that happens, no cleanup ever runs and the destination
+     * stays "busy" forever, failing every later send to that node with [Busy]. Every send
+     * overload routes its abnormal exit through here.
+     */
+    private suspend fun clearBusyOnAbnormalExit(destination: MeshAddress, cause: Throwable): Nothing {
+        withContext(NonCancellable) { clearOutgoingMessages(destination) }
+        throw cause
+    }
+
+    /**
      * Encrypts the message with the Application Key and a Network Key bound to it, and sends to the
      * given destination address.
      *
@@ -309,15 +323,21 @@ internal class NetworkManager internal constructor(
         destination: MeshAddress,
         initialTtl: UByte?,
         applicationKey: ApplicationKey,
-    ): MeshMessage? = if (!ensureNotBusy(destination = destination)) accessLayer.send(
-        message = message,
-        element = element,
-        destination = destination,
-        ttl = initialTtl,
-        applicationKey = applicationKey,
-        retransmit = false
-    ).also {
-        mutex.withLock { outgoingMessages.remove(destination) }
+    ): MeshMessage? = if (!ensureNotBusy(destination = destination)) {
+        try {
+            accessLayer.send(
+                message = message,
+                element = element,
+                destination = destination,
+                ttl = initialTtl,
+                applicationKey = applicationKey,
+                retransmit = false
+            ).also {
+                mutex.withLock { outgoingMessages.remove(destination) }
+            }
+        } catch (t: Throwable) {
+            clearBusyOnAbnormalExit(destination, t)
+        }
     } else null
 
     /**
@@ -348,15 +368,19 @@ internal class NetworkManager internal constructor(
         //val meshAddress = MeshAddress.create(address = destination)
         require(!ensureNotBusy(destination = destination)) { return null }
 
-        return accessLayer.send(
-            message = message,
-            element = element,
-            destination = destination,
-            ttl = initialTtl,
-            applicationKey = applicationKey,
-            retransmit = false
-        ).also {
-            mutex.withLock { outgoingMessages.remove(destination) }
+        return try {
+            accessLayer.send(
+                message = message,
+                element = element,
+                destination = destination,
+                ttl = initialTtl,
+                applicationKey = applicationKey,
+                retransmit = false
+            ).also {
+                mutex.withLock { outgoingMessages.remove(destination) }
+            }
+        } catch (t: Throwable) {
+            clearBusyOnAbnormalExit(MeshAddress.create(address = destination), t)
         }
     }
 
@@ -386,15 +410,19 @@ internal class NetworkManager internal constructor(
     ) {
         val meshAddress = MeshAddress.create(address = destination)
         require(!ensureNotBusy(destination = meshAddress)) { throw Busy() }
-        accessLayer.send(
-            message = configMessage,
-            localElement = element,
-            destination = destination,
-            initialTtl = initialTtl,
-            networkKey = networkKey
-        ).also {
-            // Added to clear the outgoing message list
-            mutex.withLock { outgoingMessages.remove(meshAddress) }
+        try {
+            accessLayer.send(
+                message = configMessage,
+                localElement = element,
+                destination = destination,
+                initialTtl = initialTtl,
+                networkKey = networkKey
+            ).also {
+                // Added to clear the outgoing message list
+                mutex.withLock { outgoingMessages.remove(meshAddress) }
+            }
+        } catch (t: Throwable) {
+            clearBusyOnAbnormalExit(meshAddress, t)
         }
     }
 
@@ -426,15 +454,19 @@ internal class NetworkManager internal constructor(
     ): MeshMessage? {
         val meshAddress = MeshAddress.create(address = destination)
         require(!ensureNotBusy(destination = meshAddress)) { return null }
-        return accessLayer.send(
-            message = configMessage,
-            localElement = element,
-            destination = destination,
-            initialTtl = initialTtl,
-            networkKey = networkKey
-        ).also {
-            // Added to clear the outgoing message list
-            mutex.withLock { outgoingMessages.remove(meshAddress) }
+        return try {
+            accessLayer.send(
+                message = configMessage,
+                localElement = element,
+                destination = destination,
+                initialTtl = initialTtl,
+                networkKey = networkKey
+            ).also {
+                // Added to clear the outgoing message list
+                mutex.withLock { outgoingMessages.remove(meshAddress) }
+            }
+        } catch (t: Throwable) {
+            clearBusyOnAbnormalExit(meshAddress, t)
         }
     }
 
