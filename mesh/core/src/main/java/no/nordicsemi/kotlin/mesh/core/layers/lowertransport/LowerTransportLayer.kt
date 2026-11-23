@@ -868,6 +868,11 @@ internal class LowerTransportLayer(private val networkManager: NetworkManager) {
         // Start the SAR Unicast Retransmissions timer.
         unicastRetransmissionsTimers[sequenceZero] = fixedRateTimer(
             name = "Unicast Retransmission Timer",
+            // lagree: fixedRateTimer's initialDelay defaults to 0, which fired the "expired"
+            // callback at once and resent every unacknowledged segment ~80 ms after the last
+            // one instead of after the SAR interval. That duplicate crossed the peer's Segment
+            // ACK and hung the Bitgear BT module on ConfigAppKeyAdd (run 13, 4 of 7).
+            initialDelay = interval.inWholeMilliseconds,
             period = interval.inWholeMilliseconds
         ) {
             // The timer has expired, remove it.
@@ -940,6 +945,8 @@ internal class LowerTransportLayer(private val networkManager: NetworkManager) {
         // Start the SAR Multicast Retransmissions timer.
         multicastRetransmissionsTimers[sequenceZero] = fixedRateTimer(
             name = "Multicast Retransmission Timer",
+            // lagree: same missing initialDelay as the unicast timer above.
+            initialDelay = interval.inWholeMilliseconds,
             period = interval.inWholeMilliseconds
         ) {
             // The timer has expired, remove it.
@@ -988,6 +995,18 @@ internal class LowerTransportLayer(private val networkManager: NetworkManager) {
         sequenceZero: UShort,
         destination: MeshAddress,
     ) {
+        // lagree: the retransmission timers now really wait one SAR interval, so they are still
+        // pending when the transfer completes (full ACK, busy, timeout). Left running, the
+        // callback would later run this function again and release the destination's queue a
+        // second time.
+        unicastRetransmissionsTimers.remove(sequenceZero)?.let {
+            it.cancel()
+            it.purge()
+        }
+        multicastRetransmissionsTimers.remove(sequenceZero)?.let {
+            it.cancel()
+            it.purge()
+        }
         remainingNumberOfUnicastRetransmissions.remove(sequenceZero)
         remainingNumberOfMulticastRetransmissions.remove(sequenceZero)
         outgoingSegments.remove(sequenceZero)
